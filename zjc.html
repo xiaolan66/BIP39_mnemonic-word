@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- 设置页面标题为 BIP39 助记词生成器（增强版） -->
+    <title>BIP39 助记词生成器（增强版）</title>
+    <style>
+        /* 设置页面整体的字体为 Arial 或 sans-serif，最大宽度为 800px，外边距上下 20px 左右自动居中，内边距 20px */
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+
+        /* 设置容器类的外边距底部为 20px */
+        .container {
+            margin-bottom: 20px;
+        }
+
+        /* 设置输入框类型为 number 的宽度为 200px，内边距 5px */
+        input[type="number"] {
+            width: 200px;
+            padding: 5px;
+        }
+
+        /* 设置按钮的内边距上下 5px 左右 15px，左边距 10px */
+        button {
+            padding: 5px 15px;
+            margin-left: 10px;
+        }
+
+        /* 设置 id 为 result 的元素的上边距为 20px */
+        #result {
+            margin-top: 20px;
+        }
+
+        /* 设置助记词类的字体为等宽字体，内边距 10px，上下外边距 5px 左右 0px，背景色为浅灰色，圆角 4px，允许单词换行 */
+        .mnemonic {
+            font-family: monospace;
+            padding: 10px;
+            margin: 5px 0;
+            background: #f5f5f5;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+
+        /* 设置错误类的文字颜色为红色 */
+        .error {
+            color: red;
+        }
+
+        /* 设置加载类的透明度为 0.6，禁止鼠标事件 */
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 一个容器，包含输入框和按钮 -->
+    <div class="container">
+        <!-- 输入框，用于输入生成数量，初始值为 5，最小值 1，最大值 100，每次增减 1 -->
+        <input type="number" id="count" value="5" min="1" max="100" placeholder="输入生成数量（1 - 100）" step="1">
+        <!-- 按钮，点击时调用 generateMnemonics 函数 -->
+        <button id="generateBtn" onclick="generateMnemonics()">开始生成</button>
+    </div>
+    <!-- 用于显示生成结果的 div -->
+    <div id="result"></div>
+
+    <script>
+        // 用于存储词库的数组
+        let wordList = [];
+        // 有效的词库大小，应为 2048
+        const VALID_WORDLIST_SIZE = 2048;
+        // 词库的 URL
+        const WORDLIST_URL = 'https://raw.githubusercontent.com/bitcoin/bips/refs/heads/master/bip-0039/english.txt';
+
+        // 增强的词库加载（包含完整性检查）
+        async function loadWordList() {
+            try {
+                // 发起请求获取词库文件
+                const response = await fetch(WORDLIST_URL);
+                // 获取响应的文本内容
+                const text = await response.text();
+                // 将文本按换行符分割成数组，去除首尾空格，过滤掉空字符串
+                wordList = text.split('\n')
+                    .map(word => word.trim())
+                    .filter(word => word);
+
+                // 检查词库的长度是否符合预期
+                if (wordList.length !== VALID_WORDLIST_SIZE) {
+                    throw new Error(`词库加载失败，期望 2048 个单词，实际加载 ${wordList.length} 个`);
+                }
+            } catch (err) {
+                // 显示错误信息
+                showError('词库加载失败，请刷新页面重试');
+                throw err;
+            }
+        }
+
+        // 增强的输入验证
+        function validateInput() {
+            // 获取输入框元素
+            const input = document.getElementById('count');
+            // 将输入框的值转换为整数
+            let value = parseInt(input.value, 10);
+
+            // 如果转换失败或值小于 1，将值设为 1
+            if (isNaN(value) || value < 1) {
+                value = 1;
+            }
+            // 确保值在 1 到 100 之间
+            value = Math.min(100, Math.max(1, value));
+            // 将处理后的值更新到输入框
+            input.value = value;
+            return value;
+        }
+
+        // 改进的助记词验证（完整 BIP39 规范检查）
+        async function validateMnemonic(mnemonic) {
+            // 将助记词按空格分割成单词数组
+            const words = mnemonic.split(' ');
+            // 检查单词数量是否符合 BIP39 规范
+            if (![12, 15, 18, 21, 24].includes(words.length)) return false;
+
+            try {
+                // 转换为二进制熵+校验和
+                // 将每个单词转换为对应的二进制表示，填充到 11 位
+                const bits = words.map(word => {
+                    const index = wordList.indexOf(word);
+                    return index.toString(2).padStart(11, '0');
+                }).join('');
+
+                // 计算熵和校验和的分割点
+                const dividerIndex = Math.floor(bits.length / 33) * 32;
+                // 提取熵的二进制位
+                const entropyBits = bits.slice(0, dividerIndex);
+                // 提取校验和的二进制位
+                const checksumBits = bits.slice(dividerIndex);
+
+                // 计算校验和
+                // 创建一个 Uint8Array 存储熵的字节
+                const entropyBytes = new Uint8Array(entropyBits.length / 8);
+                for (let i = 0; i < entropyBytes.length; i++) {
+                    // 将二进制位转换为字节
+                    entropyBytes[i] = parseInt(entropyBits.slice(i * 8, i * 8 + 8), 2);
+                }
+
+                // 计算熵的 SHA-256 哈希
+                const hashBuffer = await crypto.subtle.digest('SHA-256', entropyBytes);
+                // 将哈希结果转换为二进制字符串，截取与校验和长度相同的部分
+                const computedChecksum = Array.from(new Uint8Array(hashBuffer))
+                    .map(byte => byte.toString(2).padStart(8, '0')).join('')
+                    .slice(0, checksumBits.length);
+
+                // 比较计算得到的校验和与提取的校验和是否相等
+                return computedChecksum === checksumBits;
+            } catch {
+                return false;
+            }
+        }
+
+        // 增强的生成流程（包含验证）
+        async function generateMnemonics() {
+            try {
+                // 验证输入并获取生成数量
+                const count = validateInput();
+                // 获取显示结果的 div 元素
+                const resultDiv = document.getElementById('result');
+                // 清空结果 div 的内容
+                resultDiv.innerHTML = '';
+
+                // 如果词库长度不符合预期，重新加载词库
+                if (wordList.length !== VALID_WORDLIST_SIZE) await loadWordList();
+
+                // 循环生成指定数量的助记词
+                for (let i = 0; i < count; i++) {
+                    // 生成 128 位（16 字节）的熵
+                    const entropy = new Uint8Array(16);
+                    // 用随机值填充熵数组
+                    crypto.getRandomValues(entropy);
+
+                    // 计算校验和
+                    // 计算熵的 SHA-256 哈希
+                    const hashBuffer = await crypto.subtle.digest('SHA-256', entropy);
+                    // 128 位熵对应的校验和长度为 4 位
+                    const checksumLength = 4; // 128/32 = 4 bits
+                    // 将哈希结果转换为二进制字符串，截取前 4 位作为校验和
+                    const checksum = Array.from(new Uint8Array(hashBuffer))
+                        .map(byte => byte.toString(2).padStart(8, '0')).join('')
+                        .slice(0, checksumLength);
+
+                    // 生成二进制字符串
+                    // 将熵转换为二进制字符串
+                    const entropyBits = Array.from(entropy)
+                        .map(byte => byte.toString(2).padStart(8, '0')).join('');
+                    // 将熵的二进制字符串和校验和拼接
+                    const bits = entropyBits + checksum;
+
+                    // 生成助记词
+                    const words = [];
+                    for (let j = 0; j < 12; j++) {
+                        // 计算每个单词的起始位置
+                        const start = j * 11;
+                        // 提取 11 位二进制，转换为整数作为词库索引
+                        const index = parseInt(bits.slice(start, start + 11), 2);
+                        // 根据索引从词库中获取单词
+                        words.push(wordList[index]);
+                    }
+
+                    // 验证助记词
+                    // 将单词数组拼接成助记词字符串
+                    const mnemonic = words.join(' ');
+                    // 验证生成的助记词是否符合 BIP39 规范
+                    if (!await validateMnemonic(mnemonic)) {
+                        throw new Error('生成的助记词未通过 BIP39 验证');
+                    }
+
+                    // 显示结果
+                    // 创建一个 pre 元素
+                    const pre = document.createElement('pre');
+                    // 设置 pre 元素的类名为 mnemonic
+                    pre.className = 'mnemonic';
+                    // 将助记词设置为 pre 元素的文本内容
+                    pre.textContent = mnemonic;
+                    // 将 pre 元素添加到结果 div 中
+                    resultDiv.appendChild(pre);
+                }
+            } catch (err) {
+                // 显示错误信息
+                showError(`生成失败：${err.message}`);
+            }
+        }
+
+        // 显示错误信息的函数
+        function showError(message) {
+            // 创建一个 div 元素
+            const div = document.createElement('div');
+            // 设置 div 元素的类名为 error
+            div.className = 'error';
+            // 将错误信息设置为 div 元素的文本内容
+            div.textContent = message;
+            // 将 div 元素添加到结果 div 中
+            document.getElementById('result').appendChild(div);
+        }
+
+        // 初始化加载
+        window.addEventListener('DOMContentLoaded', async () => {
+            // 获取生成按钮元素
+            const generateBtn = document.getElementById('generateBtn');
+            // 给按钮添加 loading 类，使其显示加载状态
+            generateBtn.classList.add('loading');
+            try {
+                // 加载词库
+                await loadWordList();
+                // 移除按钮的 loading 类，恢复正常状态
+                generateBtn.classList.remove('loading');
+            } catch (err) {
+                // 显示初始化失败的错误信息
+                showError('初始化失败：无法加载必要资源');
+                // 在控制台输出错误信息
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+
+</html>
